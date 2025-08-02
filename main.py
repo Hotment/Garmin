@@ -1,21 +1,12 @@
-import speech_recognition as sr
-import threading
-import winsound
-import os
-import logging
-import time
+import speech_recognition as sr, threading, winsound, os, logging, time
+import numpy as np, mss, mss.exception, pyaudio, tkinter as tk, configparser
 from PIL import Image
 from datetime import datetime
 from thefuzz import fuzz
 from collections import deque
-import numpy as np
-import mss, mss.exception
-import pyaudio
 from moviepy import ImageSequenceClip, AudioFileClip
 from scipy.io.wavfile import write as write_wav
-import tkinter as tk
-from pystray import MenuItem as item, Icon
-import configparser
+from pystray import MenuItem as item, Icon, _win32
 from pydub import AudioSegment
 
 CONFIG_FILE = 'config.ini'
@@ -369,10 +360,9 @@ def main():
 
     app = VoiceTriggerApp(root)
     
-    def quit_app(icon, item):
-        print(type(icon))
+    def quit_app(icon: _win32.Icon, item):
         logger_root.getChild("QUIT").info("quitting.")
-        root.destroy
+        root.destroy()
         app.stop_all_threads()
         icon.stop()
         logger_root.getChild("QUIT").info("quit.")

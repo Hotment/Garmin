@@ -113,13 +113,12 @@ class VoiceTriggerApp:
         
         self.threads: list[RecorderThread] = []
 
-        with mss.mss() as sct:
-            self.capture_monitor = sct.monitors[1] # 1 is the primary monitor
-            logger.info(f"Locked recording to primary monitor: {self.capture_monitor}")
+        self.update_capture_monitor()
 
     def create_default_config(self):
         config = configparser.ConfigParser()
         config['General'] = {
+            'Monitor': '1',
             'VideoFPS': '15',
             'BufferSeconds': '60',
             'ExtraRecordSeconds': '30'
@@ -146,6 +145,7 @@ class VoiceTriggerApp:
         config = configparser.ConfigParser()
         config.read(CONFIG_FILE)
         
+        self.monitor_index = config.getint('General', 'Monitor')
         self.video_fps = config.getint('General', 'VideoFPS')
         self.buffer_seconds = config.getint('General', 'BufferSeconds')
         self.extra_record_seconds = config.getint('General', 'ExtraRecordSeconds')
@@ -162,6 +162,32 @@ class VoiceTriggerApp:
         self.audio_channels = 1
         self.audio_chunk_size = 1024
         logger.info("Configuration loaded.")
+
+    def refresh_config(self, icon=None, item=None):
+        self.log_message("Refreshing configuration from config.ini...", 'info')
+        
+        old_fps = self.video_fps
+        old_buffer = self.buffer_seconds
+        
+        self.load_config()
+
+        if self.video_fps != old_fps or self.buffer_seconds != old_buffer:
+            self.log_message("Video settings changed. Re-creating video buffer.", 'info')
+            self.video_buffer = deque(maxlen=self.video_fps * self.buffer_seconds)
+
+        self.update_capture_monitor()
+        
+        self.log_message("Configuration reloaded successfully.", 'info')
+
+    def update_capture_monitor(self):
+        with mss.mss() as sct:
+            if 1 <= self.monitor_index < len(sct.monitors):
+                self.capture_monitor = sct.monitors[self.monitor_index]
+                self.log_message(f"Set recording monitor to {self.monitor_index}: {self.capture_monitor}", 'info')
+            else:
+                self.log_message(f"Monitor index {self.monitor_index} is out of range. Defaulting to primary monitor (1).", 'warning')
+                self.monitor_index = 1
+                self.capture_monitor = sct.monitors[1]
 
     def log_message(self, message, level='info'):
         if level == 'error': logger.error(message)
@@ -370,7 +396,7 @@ def main():
         logger_root.getChild("QUIT").info("quit.")
 
     image = Image.open("icon.ico")
-    menu = (item('Settings', show_settings), item('Quit', quit_app))
+    menu = (item('Settings', show_settings), item('Refresh Config', app.refresh_config), item('Quit', quit_app))
     icon = Icon("VoiceTriggerApp", image, "Voice Trigger App", menu)
 
     threading.Thread(target=icon.run, daemon=True).start()

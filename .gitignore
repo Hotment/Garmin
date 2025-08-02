@@ -1,7 +1,8 @@
 .env
 *.json
-build/
 
+build/
+screenshots/
 .local/
 .cache/
 __pycache__/

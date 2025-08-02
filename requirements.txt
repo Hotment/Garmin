@@ -9,3 +9,4 @@ mss
 numpy
 scipy
 PyAudio
+pydub

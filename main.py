@@ -113,6 +113,10 @@ class VoiceTriggerApp:
         
         self.threads: list[RecorderThread] = []
 
+        with mss.mss() as sct:
+            self.capture_monitor = sct.monitors[1] # 1 is the primary monitor
+            logger.info(f"Locked recording to primary monitor: {self.capture_monitor}")
+
     def create_default_config(self):
         config = configparser.ConfigParser()
         config['General'] = {
@@ -173,11 +177,10 @@ class VoiceTriggerApp:
 
     def _record_video(self):
         with mss.mss() as sct:
-            monitor = sct.monitors[1]
             while not self.threads[0].is_stopped():
                 if not self.is_saving.is_set():
                     try:
-                        self.video_buffer.append(sct.grab(monitor))
+                        self.video_buffer.append(sct.grab(self.capture_monitor))
                     except mss.exception.ScreenShotError as e:
                         self.log_message(f"Video capture error: {e}", "error")
                 time.sleep(1 / self.video_fps)
@@ -241,9 +244,8 @@ class VoiceTriggerApp:
 
         extra_frames_to_grab = self.video_fps * self.extra_record_seconds
         with mss.mss() as sct:
-            monitor = sct.monitors[1]
             for _ in range(extra_frames_to_grab):
-                video_frames.append(sct.grab(monitor))
+                video_frames.append(sct.grab(self.capture_monitor))
                 time.sleep(1 / self.video_fps)
 
         self.log_message("Finished recording. Now processing and saving the clip...", 'info')
@@ -257,7 +259,7 @@ class VoiceTriggerApp:
         final_clip = None
 
         try:
-            rgb_frames = [np.array(frame)[:,:,:3] for frame in video_frames]
+            rgb_frames = [np.array(frame)[:,:,:3][:,:,::-1] for frame in video_frames]
             video_clip = ImageSequenceClip(rgb_frames, fps=self.video_fps)
 
             mic_sound = AudioSegment(data=mic_data_bytes, sample_width=self.audio_interface.get_sample_size(self.audio_format), channels=self.audio_channels, frame_rate=self.sample_rate) if mic_data_bytes else None

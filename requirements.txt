@@ -1,12 +1,11 @@
-tkinter
 SpeechRecognition
+pillow
 pyaudio
-thefuzz 
-python-Levenshtein
+thefuzz
 pystray
-moviepy 
-mss 
+moviepy
+mss
 numpy
 scipy
-PyAudio
 pydub
+configparser

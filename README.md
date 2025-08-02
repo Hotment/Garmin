@@ -1,33 +1,37 @@
-# PC Dash Cam - Voice-Activated Screen Recorder
+# PC Dash Cam - Voice-Controlled Screen Recorder
 
-PC Dash Cam is a lightweight, background application for Windows that continuously records your screen and audio, much like a dash cam in a car. It keeps a rolling buffer of the last minute of activity and, when triggered by a voice command, saves a video clip of the event, including the moments leading up to and following the command.
+PC Dash Cam is an always-running, low-footprint Windows background app that keeps recording your screen and audio at all times. It has a rolling buffer of the last minute of activity and, upon being triggered by a voice command, saves a video clip of what transpired, including the short time before and after the command.
 
-This makes it perfect for capturing unexpected moments during gameplay, video calls, or any other screen activity without having to constantly record and manage large video files.
+This makes it perfect to capture surprise moments of gameplay, video calls, or any other screen activity without repeatedly recording and managing large video files.
+
+## Inspiration
+
+The project was inspired by a popular internet meme which made me laugh. I had to replicate the voice-controlled, instant replay functionality for my PC.
 
 ## Features
 
-* **Continuous Background Recording:** Runs silently in the system tray, constantly recording your primary monitor to a temporary in-memory buffer.
+* **Continuous Background Recording:** Runs silently in the system tray, constantly recording your primary monitor to a transient in-memory buffer continuously.
 * **Voice Activation:** Use a wake phrase like "Ok Garmin" to activate the command listener.
-* **Pre- and Post-Event Buffering:** Saves a video clip that includes the 60 seconds *before* you gave the command and the 30 seconds *after*, ensuring you never miss the action.
-* **Combined Audio:** Captures both your microphone audio and the system's output audio (e.g., game sounds, call audio) and mixes them into the final video.
-* **External Configuration:** All settings, phrases, and languages can be easily modified in a simple `config.ini` file without touching the code.
-* **Live Reload:** Refresh the configuration on-the-fly from the system tray menu without restarting the app.
-* **Visual Feedback:** A small, semi-transparent "Listening..." window appears on your focused screen to confirm the wake word was heard.
-* **Multi-Language Support:** Define command phrases in multiple languages within the configuration file.
+* **Pre- and Post-Event Buffering:** Saves a video clip that includes the 60 seconds *before* you gave the command and the 30 seconds *after*, so you never miss the action.
+* **Mixed Audio:** Captures both your microphone audio and the system's sound (e.g., game sound, call sound) and mixes them into the final video.
+* **External Configurability:** All settings, phrases, and languages can be easily modified in a simple `config.ini` file without touching the code.
+* **Live Reload:** Reload the config in real time from the system tray menu without requiring a restart of the app.
+* **Visual Feedback:** A small, semi-transparent "Listening..." window appears on your current screen to show the wake word was heard.
+* **Multi-Language Support:** Define command words in multiple languages in the config file.
 
 ## Installation
 
-1.  **Prerequisites:** Ensure you have Python 3.9+ installed on your system.
-2.  **Download:** Download the project files (`main.py`, `compile.bat`, etc.) and place them in a folder.
-3.  **Install Dependencies:** Open a command prompt or terminal in the project folder and run the following command to install the required Python libraries:
+1.  **Prerequisites:** Install Python 3.9+ on your machine.
+2.  **Download:** Clone the repository to your local machine using `git clone`.
+3.  **Install Dependencies:** Open a command prompt or terminal in the project folder and run the following command to install all required Python libraries from the `requirements.txt` file:
     ```bash
-    pip install speechrecognition pystray pillow numpy mss pyaudio moviepy thefuzz pydub configparser
+    pip install -r requirements.txt
     ```
 
 ## Usage
 
-1.  **Run the Application:** Double-click the `main.py` file or run `python main.py` from the terminal.
-2.  **System Tray Icon:** The application will start and an icon will appear in your system tray. Right-click the icon for options.
+1.  **Run the Application:** Double-click on the `main.py` file or run `python main.py` from the terminal.
+2.  **System Tray Icon:** The app will launch and show an icon will appear in your system tray. Right-click the icon for options.
 3.  **Voice Command Workflow:**
     * Say the activation phrase (e.g., **"Ok Garmin"**).
     * A beep will sound, and a **"Listening..."** indicator will appear on your focused monitor.
@@ -47,9 +51,9 @@ The `config.ini` file allows you to customize the application's behavior.
 ### `[General]`
 
 * `Monitor`: The monitor to record. `1` is your primary monitor, `2` is your secondary, etc.
-* `VideoFPS`: Frames per second for the recording. `15` is a good balance of quality and performance.
-* `BufferSeconds`: How many seconds of footage to keep in memory before a command.
-* `ExtraRecordSeconds`: How many seconds to continue recording after a command.
+* `VideoFPS`: Frames per second for the recording. `15` is a good quality vs. performance compromise.
+* `BufferSeconds`: Amount of seconds of video to hold in memory before a command.
+* `ExtraRecordSeconds`: Amount of seconds to continue recording after a command.
 
 ### `[Recognition]`
 
@@ -64,7 +68,7 @@ The `config.ini` file allows you to customize the application's behavior.
 
 ## Compiling to an `.exe`
 
-To create a standalone executable that can be run on any Windows machine (without needing Python installed), simply run the `compile.bat` file. This uses **Nuitka** to package the script and all its dependencies into a single `.exe` file located in the `build` directory.
+To compile to a standalone `.exe` that can be executed on any Windows machine (without the need to have Python installed), simply run the `compile.bat` file. This uses **Nuitka** to package the script and all its dependencies into a single `.exe` file located in the `build` directory.
 
 ## To-Do List & Future Ideas
 

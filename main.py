@@ -63,8 +63,27 @@ class IndicatorWindow(tk.Toplevel):
         self.master.after(0, self._show_on_main_thread)
 
     def _show_on_main_thread(self):
-        screen_width = self.master.winfo_screenwidth()
-        self.geometry(f"+{screen_width - self.winfo_width() - 20}+20")
+        try:
+            mouse_x, mouse_y = self.master.winfo_pointerxy()
+            target_monitor = None
+            with mss.mss() as sct:
+                for monitor in sct.monitors:
+                    if (monitor["left"] <= mouse_x < monitor["left"] + monitor["width"] and
+                        monitor["top"] <= mouse_y < monitor["top"] + monitor["height"]):
+                        target_monitor = monitor
+                        break
+            
+            if target_monitor is None:
+                target_monitor = sct.monitors[0]
+            
+            x_pos = target_monitor["left"] + 20
+            y_pos = target_monitor["top"] + 20
+            self.geometry(f"+{x_pos}+{y_pos}")
+        except Exception as e:
+            logger.error(f"Could not position indicator window: {e}")
+            screen_width = self.master.winfo_screenwidth()
+            self.geometry(f"+{screen_width - self.winfo_width() - 20}+20")
+
         self.deiconify()
 
     def hide(self):

@@ -3,6 +3,7 @@
 
 build/
 screenshots/
+recordings/
 .local/
 .cache/
 __pycache__/

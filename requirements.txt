@@ -3,3 +3,9 @@ SpeechRecognition
 pyaudio
 thefuzz 
 python-Levenshtein
+pystray
+moviepy 
+mss 
+numpy
+scipy
+PyAudio

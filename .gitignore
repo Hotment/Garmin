@@ -3,6 +3,7 @@
 *.spec
 *.iss
 
+temp*/
 build/
 dist/
 Output/

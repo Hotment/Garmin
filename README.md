@@ -72,7 +72,7 @@ To compile to a standalone `.exe` that can be executed on any Windows machine (w
 
 ## To-Do List & Future Ideas
 
-* [ ] **Memory saving:** Switch to a more efficient approach for the video saving.
+* [x] **Memory saving:** Switch to a more efficient approach for the video saving.
 * [ ] **Full Settings GUI:** Create a proper graphical user interface for the "Settings" option instead of just opening the `.ini` file.
 * [ ] **On-the-fly Monitor Switching:** Add an option in the tray menu to switch the recording monitor without editing the config file.
 * [ ] **Audio Mixing Controls:** Implement volume controls in the config file to adjust the balance between microphone and system audio.

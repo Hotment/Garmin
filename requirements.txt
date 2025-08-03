@@ -1,11 +1,9 @@
 SpeechRecognition
 pillow
-pyaudio
 thefuzz
 pystray
 moviepy
-mss
-numpy
 scipy
 pydub
 configparser
+dxcam

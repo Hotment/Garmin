@@ -1,15 +1,14 @@
 import speech_recognition as sr, threading, winsound, os, logging, time
-import numpy as np, mss, mss.exception, pyaudio, tkinter as tk, configparser
+import tkinter as tk, configparser, sys, shutil, dxcam
 from PIL import Image
 from datetime import datetime
 from thefuzz import fuzz
-from collections import deque
-from moviepy import ImageSequenceClip, AudioFileClip
-from scipy.io.wavfile import write as write_wav
+from moviepy import VideoFileClip, concatenate_videoclips, AudioFileClip, ImageSequenceClip
 from pystray import MenuItem as item, Icon, _win32
-from pydub import AudioSegment
+from scipy.io.wavfile import write as write_wav
 
 CONFIG_FILE = 'config.ini'
+TEMP_DIR = "temp_capture"
 
 # --- Setup Logging ---
 if not os.path.exists('logs'):
@@ -24,18 +23,6 @@ app_handler.setFormatter(logging.Formatter(log_format))
 logger_root.addHandler(app_handler)
 logger = logger_root.getChild("main")
 
-# --- Recorder Thread ---
-class RecorderThread(threading.Thread):
-    def __init__(self, name, target, *args, **kwargs):
-        super().__init__(name=name, target=target, args=args, kwargs=kwargs, daemon=True)
-        self._stop_event = threading.Event()
-
-    def stop(self):
-        self._stop_event.set()
-
-    def is_stopped(self):
-        return self._stop_event.is_set()
-
 # --- Visual Indicator Window ---
 class IndicatorWindow(tk.Toplevel):
     def __init__(self, master):
@@ -44,10 +31,10 @@ class IndicatorWindow(tk.Toplevel):
         self.wm_attributes("-topmost", True)
         self.wm_attributes("-alpha", 0.75)
         self.configure(bg='black')
-        
+
         self.label = tk.Label(self, text="Listening...", fg="white", bg="black", font=("Helvetica", 16, "bold"))
         self.label.pack(padx=20, pady=10)
-        
+
         self.withdraw()
 
     def show(self):
@@ -56,24 +43,9 @@ class IndicatorWindow(tk.Toplevel):
     def _show_on_main_thread(self):
         try:
             mouse_x, mouse_y = self.master.winfo_pointerxy()
-            target_monitor = None
-            with mss.mss() as sct:
-                for monitor in sct.monitors:
-                    if (monitor["left"] <= mouse_x < monitor["left"] + monitor["width"] and
-                        monitor["top"] <= mouse_y < monitor["top"] + monitor["height"]):
-                        target_monitor = monitor
-                        break
-            
-            if target_monitor is None:
-                target_monitor = sct.monitors[0]
-            
-            x_pos = target_monitor["left"] + 20
-            y_pos = target_monitor["top"] + 20
-            self.geometry(f"+{x_pos}+{y_pos}")
-        except Exception as e:
-            logger.error(f"Could not position indicator window: {e}")
-            screen_width = self.master.winfo_screenwidth()
-            self.geometry(f"+{screen_width - self.winfo_width() - 20}+20")
+            self.geometry(f"+{mouse_x + 20}+{mouse_y + 20}")
+        except Exception:
+            self.geometry(f"+{self.master.winfo_screenwidth() - 200}+20")
 
         self.deiconify()
 
@@ -90,15 +62,10 @@ class VoiceTriggerApp:
         self.recognizer = sr.Recognizer()
 
         self.load_config()
+        self.validate_monitor_index()
 
-        self.video_buffer = deque(maxlen=self.video_fps * self.buffer_seconds)
-
-        # --- PyAudio Setup ---
-        self.audio_interface = pyaudio.PyAudio()
-        self.mic_audio_buffer = deque(maxlen=int(self.sample_rate / self.audio_chunk_size * self.buffer_seconds))
-        self.sys_audio_buffer = deque(maxlen=int(self.sample_rate / self.audio_chunk_size * self.buffer_seconds))
-        self.mic_stream = None
-        self.sys_stream = None
+        self.recorder_thread = None
+        self.stop_recorder_event = threading.Event()
        
         self.recognizer.energy_threshold = 3000
         self.recognizer.dynamic_energy_threshold = True
@@ -110,20 +77,17 @@ class VoiceTriggerApp:
                 logger.info("Ambient noise adjustment complete.")
         except Exception as e:
             logger.error(f"Could not adjust for ambient noise: {e}")
-        
-        self.threads: list[RecorderThread] = []
-
-        self.update_capture_monitor()
 
     def create_default_config(self):
         config = configparser.ConfigParser()
         config['General'] = {
             'Monitor': '1',
-            'VideoFPS': '15',
+            'VideoFPS': '30',
             'BufferSeconds': '60',
             'ExtraRecordSeconds': '30'
         }
         config['Recognition'] = {
+            'Recognizer': 'google',
             'PauseThreshold': '0.4',
             'NonSpeakingDuration': '0.4',
             'MatchConfidence': '85',
@@ -150,44 +114,33 @@ class VoiceTriggerApp:
         self.buffer_seconds = config.getint('General', 'BufferSeconds')
         self.extra_record_seconds = config.getint('General', 'ExtraRecordSeconds')
         
+        self.recognizer_service = config.get('Recognition', 'Recognizer', fallback='google').lower()
         self.recognizer.pause_threshold = config.getfloat('Recognition', 'PauseThreshold')
         self.recognizer.non_speaking_duration = config.getfloat('Recognition', 'NonSpeakingDuration')
         self.match_confidence_threshold = config.getint('Recognition', 'MatchConfidence')
         self.activation_phrases = [p.strip() for p in config.get('Recognition', 'ActivationPhrases').split(',')]
-        
         self.command_phrases = dict(config.items('Commands'))
         
-        self.sample_rate = 44100
-        self.audio_format = pyaudio.paInt16
-        self.audio_channels = 1
-        self.audio_chunk_size = 1024
-        logger.info("Configuration loaded.")
+        logger.info(f"Configuration loaded. Using '{self.recognizer_service}' recognizer.")
+
+    def validate_monitor_index(self):
+        """Checks if the configured monitor index is valid and defaults to 0 if not."""
+        try:
+            devices = dxcam.create().get_devices()
+            if not (0 <= self.monitor_index < len(devices)):
+                self.log_message(f"Monitor index {self.monitor_index} is invalid. Available monitors: {len(devices)}. Defaulting to monitor 0.", 'warning')
+                self.monitor_index = 0
+        except Exception as e:
+            self.log_message(f"Could not validate monitor index: {e}. Defaulting to 0.", 'error')
+            self.monitor_index = 0
 
     def refresh_config(self, icon=None, item=None):
-        self.log_message("Refreshing configuration from config.ini...", 'info')
-        
-        old_fps = self.video_fps
-        old_buffer = self.buffer_seconds
-        
+        self.log_message("Refreshing configuration...", 'info')
+        self.stop_recording()
         self.load_config()
-
-        if self.video_fps != old_fps or self.buffer_seconds != old_buffer:
-            self.log_message("Video settings changed. Re-creating video buffer.", 'info')
-            self.video_buffer = deque(maxlen=self.video_fps * self.buffer_seconds)
-
-        self.update_capture_monitor()
-        
-        self.log_message("Configuration reloaded successfully.", 'info')
-
-    def update_capture_monitor(self):
-        with mss.mss() as sct:
-            if 1 <= self.monitor_index < len(sct.monitors):
-                self.capture_monitor = sct.monitors[self.monitor_index]
-                self.log_message(f"Set recording monitor to {self.monitor_index}: {self.capture_monitor}", 'info')
-            else:
-                self.log_message(f"Monitor index {self.monitor_index} is out of range. Defaulting to primary monitor (1).", 'warning')
-                self.monitor_index = 1
-                self.capture_monitor = sct.monitors[1]
+        self.validate_monitor_index()
+        self.start_recording()
+        self.log_message("Configuration reloaded and recorder restarted.", 'info')
 
     def log_message(self, message, level='info'):
         if level == 'error': logger.error(message)
@@ -201,141 +154,160 @@ class VoiceTriggerApp:
     def play_confirmation_sound(self):
         threading.Thread(target=lambda: [winsound.Beep(1200, 75) for _ in range(3)], daemon=True).start()
 
-    def _record_video(self):
-        with mss.mss() as sct:
-            while not self.threads[0].is_stopped():
-                if not self.is_saving.is_set():
-                    try:
-                        self.video_buffer.append(sct.grab(self.capture_monitor))
-                    except mss.exception.ScreenShotError as e:
-                        self.log_message(f"Video capture error: {e}", "error")
-                time.sleep(1 / self.video_fps)
+    def start_recording(self):
+        self.log_message("Starting recorder thread...", 'info')
+        self.stop_recorder_event.clear()
+        self.recorder_thread = threading.Thread(target=self.record_loop, daemon=True)
+        self.recorder_thread.start()
 
-    def _mic_callback(self, in_data, frame_count, time_info, status):
-        if not self.is_saving.is_set(): self.mic_audio_buffer.append(in_data)
-        return (in_data, pyaudio.paContinue)
+    def stop_recording(self):
+        self.log_message("Stopping recorder thread...", 'info')
+        self.stop_recorder_event.set()
+        if self.recorder_thread and self.recorder_thread.is_alive():
+            self.recorder_thread.join()
+        self.log_message("Recorder thread stopped.", 'info')
 
-    def _sys_audio_callback(self, in_data, frame_count, time_info, status):
-        if not self.is_saving.is_set(): self.sys_audio_buffer.append(in_data)
-        return (in_data, pyaudio.paContinue)
+    def record_loop(self):
+        """Continuously captures video and audio to a file-based circular buffer."""
+        if os.path.exists(TEMP_DIR):
+            shutil.rmtree(TEMP_DIR)
+        os.makedirs(TEMP_DIR)
 
-    def start_audio_stream(self):
-        try:
-            self.mic_stream = self.audio_interface.open(format=self.audio_format, channels=self.audio_channels, rate=self.sample_rate, input=True, frames_per_buffer=self.audio_chunk_size, stream_callback=self._mic_callback)
-            self.mic_stream.start_stream()
-            self.log_message("Microphone stream started.")
-        except Exception as e:
-            self.log_message(f"Failed to start audio stream: {e}", "error")
+        camera = dxcam.create(output_color="RGB", device_idx=self.monitor_index)
+        camera.start(target_fps=self.video_fps, video_mode=True)
+        
+        segment_duration = 1 # seconds
+        max_segments = self.buffer_seconds // segment_duration
+        
+        segment_files = []
 
-        try:
-            wasapi_info = self.audio_interface.get_host_api_info_by_type(pyaudio.paWASAPI)
-            default_speakers_info = self.audio_interface.get_device_info_by_index(wasapi_info["defaultOutputDevice"])
+        while not self.stop_recorder_event.is_set():
+            if self.is_saving.is_set():
+                time.sleep(0.1)
+                continue
+
+            start_time = time.time()
+            frames = []
             
-            loopback_device_info = None
-            for i in range(self.audio_interface.get_device_count()):
-                device_info = self.audio_interface.get_device_info_by_index(i)
-                if (device_info["hostApi"] == wasapi_info["index"] and 
-                    device_info["maxInputChannels"] > 0 and
-                    'loopback' in device_info['name'].lower()):
-                    if default_speakers_info['name'] in device_info['name']:
-                        loopback_device_info = device_info
-                        break
-            
-            if not loopback_device_info:
-                self.log_message("Could not find a suitable WASAPI loopback device.", "warning")
-                return
+            while time.time() - start_time < segment_duration:
+                frame = camera.get_latest_frame()
+                if frame is not None:
+                    frames.append(frame)
+                time.sleep(1 / (self.video_fps * 2)) 
 
-            self.sys_stream = self.audio_interface.open(format=self.audio_format, channels=loopback_device_info["maxInputChannels"], rate=int(loopback_device_info["defaultSampleRate"]), input=True, frames_per_buffer=self.audio_chunk_size, input_device_index=loopback_device_info["index"], stream_callback=self._sys_audio_callback)
-            self.sys_stream.start_stream()
-            self.log_message(f"System audio stream started on '{loopback_device_info['name']}'.")
-        except Exception as e:
-            self.log_message(f"Failed to start system audio stream: {e}", "error")
+            if frames:
+                segment_name = f"segment_{int(start_time)}.mp4"
+                segment_path = os.path.join(TEMP_DIR, segment_name)
+                
+                try:
+                    clip = ImageSequenceClip(frames, fps=self.video_fps)
+                    clip.write_videofile(segment_path, codec="libx264", logger=None)
+                    clip.close()
+                    segment_files.append(segment_path)
+                except Exception as e:
+                    self.log_message(f"Error creating video segment: {e}", "error")
 
-    def stop_audio_streams(self):
-        for stream in [self.mic_stream, self.sys_stream]:
-            if stream and stream.is_active():
-                stream.stop_stream()
-                stream.close()
-        self.audio_interface.terminate()
-        self.log_message("Audio streams stopped.")
+            while len(segment_files) > max_segments:
+                oldest_segment = segment_files.pop(0)
+                if os.path.exists(oldest_segment):
+                    os.remove(oldest_segment)
+        
+        camera.stop()
         
     def save_video_clip(self):
         if self.is_saving.is_set(): return
-        self.log_message("Save command received. Capturing final 30 seconds.", 'trigger')
+        self.log_message("Save command received...", 'trigger')
         self.is_saving.set()
 
-        video_frames = list(self.video_buffer)
-        mic_data_bytes = b''.join(list(self.mic_audio_buffer))
-        sys_data_bytes = b''.join(list(self.sys_audio_buffer))
-
-        extra_frames_to_grab = self.video_fps * self.extra_record_seconds
-        with mss.mss() as sct:
-            for _ in range(extra_frames_to_grab):
-                video_frames.append(sct.grab(self.capture_monitor))
-                time.sleep(1 / self.video_fps)
-
-        self.log_message("Finished recording. Now processing and saving the clip...", 'info')
-        if not os.path.exists("recordings"): os.makedirs("recordings")
-        
-        timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-        video_filename = f"recordings/recording_{timestamp}.mp4"
-        mic_audio_filename = f"recordings/temp_mic_{timestamp}.wav"
-        sys_audio_filename = f"recordings/temp_sys_{timestamp}.wav"
-        mixed_audio_filename = f"recordings/temp_mixed_{timestamp}.wav"
-        final_clip = None
-
         try:
-            rgb_frames = [np.array(frame)[:,:,:3][:,:,::-1] for frame in video_frames]
-            video_clip = ImageSequenceClip(rgb_frames, fps=self.video_fps)
-
-            mic_sound = AudioSegment(data=mic_data_bytes, sample_width=self.audio_interface.get_sample_size(self.audio_format), channels=self.audio_channels, frame_rate=self.sample_rate) if mic_data_bytes else None
-            sys_sound = AudioSegment(data=sys_data_bytes, sample_width=self.audio_interface.get_sample_size(self.audio_format), channels=self.audio_channels, frame_rate=self.sample_rate) if sys_data_bytes else None
-
-            if mic_sound and sys_sound:
-                mixed_sound = mic_sound.overlay(sys_sound)
-                mixed_sound.export(mixed_audio_filename, format="wav")
-                final_clip = AudioFileClip(mixed_audio_filename)
-            elif mic_sound:
-                mic_sound.export(mic_audio_filename, format="wav")
-                final_clip = AudioFileClip(mic_audio_filename)
-            elif sys_sound:
-                sys_sound.export(sys_audio_filename, format="wav")
-                final_clip = AudioFileClip(sys_audio_filename)
-
-            if final_clip:
-                video_clip = video_clip.with_audio(final_clip)
+            post_event_frames = []
+            camera = dxcam.create(output_color="RGB", device_idx=self.monitor_index)
+            camera.start(target_fps=self.video_fps, video_mode=True)
             
-            video_clip.write_videofile(video_filename, codec="libx264", audio_codec="aac", logger=None)
-            self.log_message(f"✅ Video saved as {video_filename}", 'trigger')
+            start_time = time.time()
+            while time.time() - start_time < self.extra_record_seconds:
+                frame = camera.get_latest_frame()
+                if frame is not None:
+                    post_event_frames.append(frame)
+                time.sleep(1 / (self.video_fps * 2))
+            camera.stop()
+
+            post_event_path = os.path.join(TEMP_DIR, "post_event.mp4")
+            if post_event_frames:
+                clip = ImageSequenceClip(post_event_frames, fps=self.video_fps)
+                clip.write_videofile(post_event_path, codec="libx264", logger=None)
+                clip.close()
+
+            self.log_message("Combining video clips...", 'info')
+            if not os.path.exists("recordings"): os.makedirs("recordings")
+            timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+            final_filename = f"recordings/recording_{timestamp}.mp4"
+
+            
+            buffer_files = sorted([os.path.join(TEMP_DIR, f) for f in os.listdir(TEMP_DIR) if f.startswith("segment")])
+            
+            clips_to_combine = [VideoFileClip(f) for f in buffer_files]
+            if os.path.exists(post_event_path):
+                clips_to_combine.append(VideoFileClip(post_event_path))
+
+            if clips_to_combine:
+                final_clip = concatenate_videoclips(clips_to_combine)
+                # TODO: Add audio mixing here before writing the final file
+                final_clip.write_videofile(final_filename, codec="libx264", audio_codec="aac", logger=None)
+                final_clip.close()
+                for clip in clips_to_combine:
+                    clip.close()
+                self.log_message(f"✅ Video saved as {final_filename}", 'trigger')
+            else:
+                self.log_message("No video segments to save.", "warning")
 
         except Exception as e:
             self.log_message(f"Failed to save video: {e}", 'error')
             logger.exception("Detailed error during video saving:")
         finally:
-            if final_clip: final_clip.close()
-            for f in [mic_audio_filename, sys_audio_filename, mixed_audio_filename]:
-                if os.path.exists(f): os.remove(f)
-            
-            self.video_buffer.clear()
-            self.mic_audio_buffer.clear()
-            self.sys_audio_buffer.clear()
+            if os.path.exists(TEMP_DIR):
+                shutil.rmtree(TEMP_DIR)
             self.is_saving.clear()
             self.log_message("Ready to capture again.", 'info')
 
+    def recognize(self, audio, language='en-US'):
+        """Dispatcher for different speech recognition services."""
+        try:
+            if self.recognizer_service == "google":
+                return self.recognizer.recognize_google(audio, language=language).lower()
+            elif self.recognizer_service == "amazon":
+                return self.recognizer.recognize_amazon(audio).lower()
+            elif self.recognizer_service == "lex":
+                return self.recognizer.recognize_lex(audio, language=language).lower()
+            #elif self.recognizer_service == "tensorflow":
+                #return self.recognizer.recognize_tensorflow(audio, language=language).lower() Model required
+            #elif self.recognizer_service == "vosk":
+                #return self.recognizer.recognize_vosk(audio, language=language).lower() 
+            else:
+                self.log_message(f"Recognizer '{self.recognizer_service}' not supported, defaulting to Google.", 'warning')
+                return self.recognizer.recognize_google(audio, language=language).lower()
+        except (sr.UnknownValueError, sr.RequestError) as e:
+            if not str(e):
+                return None
+            self.log_message(f"Recognition error: {e}", "error")
+            return None
+
     def listen_for_activation(self):
         while self.is_listening:
-            try:
-                with sr.Microphone() as source:
+            with sr.Microphone() as source:
+                try:
                     audio = self.recognizer.listen(source, phrase_time_limit=5)
-                transcript = self.recognizer.recognize_google(audio, language="en-US").lower()
-                self.log_message(f"Heard: \"{transcript}\"", 'user')
-                for phrase in self.activation_phrases:
-                    if fuzz.partial_ratio(phrase, transcript) > self.match_confidence_threshold:
-                        self.log_message(f"Activation phrase '{phrase.title()}' detected!", 'trigger')
-                        self.handle_activation()
-                        break
-            except (sr.UnknownValueError, sr.RequestError):
-                continue
+                    transcript = self.recognize(audio)
+                    if transcript:
+                        self.log_message(f"Heard: \"{transcript}\"", 'user')
+                        for phrase in self.activation_phrases:
+                            if fuzz.partial_ratio(phrase, transcript) > self.match_confidence_threshold:
+                                self.log_message(f"Activation phrase '{phrase.title()}' detected!", 'trigger')
+                                self.handle_activation()
+                                break
+                except Exception as e:
+                    self.log_message(f"Error in listening loop: {e}", "error")
+
 
     def handle_activation(self):
         self.play_activation_sound()
@@ -344,16 +316,16 @@ class VoiceTriggerApp:
             with sr.Microphone() as source:
                 self.log_message("Listening for command...", 'info')
                 command_audio = self.recognizer.listen(source, timeout=10, phrase_time_limit=5)
+            
             for lang_code, phrase in self.command_phrases.items():
-                try:
-                    recognized_text = self.recognizer.recognize_google(command_audio, language=lang_code).lower()
+                recognized_text = self.recognize(command_audio, language=lang_code)
+                if recognized_text:
                     self.log_message(f"Heard: \"{recognized_text}\" (checking against {lang_code})", 'user')
                     if fuzz.partial_ratio(phrase, recognized_text) > self.match_confidence_threshold:
                         self.play_confirmation_sound()
-                        threading.Thread(target=self.save_video_clip).start()
+                        threading.Thread(target=self.save_video_clip, daemon=True).start()
                         return
-                except (sr.UnknownValueError, sr.RequestError):
-                    continue
+            
             self.log_message("Command not recognized.", 'error')
         except sr.WaitTimeoutError:
             self.log_message("No command heard within 10 seconds.", 'error')
@@ -363,23 +335,18 @@ class VoiceTriggerApp:
     def start_all_threads(self):
         self.log_message("Starting all services...")
         self.is_listening = True
-        self.threads.append(RecorderThread(name="video_recorder", target=self._record_video))
-        self.start_audio_stream()
-        self.threads.append(RecorderThread(name="voice_listener", target=self.listen_for_activation))
-        for t in self.threads: t.start()
+        self.start_recording()
+        self.listener_thread = threading.Thread(name="voice_listener", target=self.listen_for_activation, daemon=True)
+        self.listener_thread.start()
         self.log_message("All services running.", 'info')
 
     def stop_all_threads(self):
         self.log_message("Stopping all services...", 'info')
         self.is_listening = False
-        for t in self.threads: t.stop()
-        for t in self.threads:
-            if t.is_alive(): t.join()
-        self.threads.clear()
-        self.stop_audio_streams()
+        self.stop_recording()
         self.log_message("All services stopped.", 'info')
 
-def show_settings(): # Needs immediate expantion
+def show_settings():
     os.startfile(CONFIG_FILE)
 
 def main():
@@ -389,11 +356,13 @@ def main():
     app = VoiceTriggerApp(root)
     
     def quit_app(icon: _win32.Icon, item):
-        logger_root.getChild("QUIT").info("quitting.")
-        root.destroy()
+        logger.info("Quit command received. Shutting down.")
         app.stop_all_threads()
         icon.stop()
-        logger_root.getChild("QUIT").info("quit.")
+        root.destroy()
+        logger.info("Exiting.")
+        sys.exit(0)
+
     try:
         image = Image.open("icon.ico")
     except FileNotFoundError:

@@ -126,7 +126,7 @@ class VoiceTriggerApp:
     def validate_monitor_index(self):
         """Checks if the configured monitor index is valid and defaults to 0 if not."""
         try:
-            devices = dxcam.create().get_devices()
+            devices = [line for line in dxcam.output_info().split("\n") if line.strip()]
             if not (0 <= self.monitor_index < len(devices)):
                 self.log_message(f"Monitor index {self.monitor_index} is invalid. Available monitors: {len(devices)}. Defaulting to monitor 0.", 'warning')
                 self.monitor_index = 0
@@ -173,7 +173,7 @@ class VoiceTriggerApp:
             shutil.rmtree(TEMP_DIR)
         os.makedirs(TEMP_DIR)
 
-        camera = dxcam.create(output_color="RGB", device_idx=self.monitor_index)
+        camera = dxcam.create(output_color="RGB", output_idx=self.monitor_index)
         camera.start(target_fps=self.video_fps, video_mode=True)
         
         segment_duration = 1 # seconds
@@ -221,7 +221,7 @@ class VoiceTriggerApp:
 
         try:
             post_event_frames = []
-            camera = dxcam.create(output_color="RGB", device_idx=self.monitor_index)
+            camera = dxcam.create(output_color="RGB", output_idx=self.monitor_index)
             camera.start(target_fps=self.video_fps, video_mode=True)
             
             start_time = time.time()

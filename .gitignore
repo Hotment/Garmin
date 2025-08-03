@@ -1,7 +1,11 @@
 .env
 *.json
+*.spec
+*.iss
 
 build/
+dist/
+Output/
 screenshots/
 recordings/
 .local/

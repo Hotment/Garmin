@@ -394,8 +394,10 @@ def main():
         app.stop_all_threads()
         icon.stop()
         logger_root.getChild("QUIT").info("quit.")
-
-    image = Image.open("icon.ico")
+    try:
+        image = Image.open("icon.ico")
+    except FileNotFoundError:
+        image = Image.open("_internal/icon.ico")
     menu = (item('Settings', show_settings), item('Refresh Config', app.refresh_config), item('Quit', quit_app))
     icon = Icon("VoiceTriggerApp", image, "Voice Trigger App", menu)
 
